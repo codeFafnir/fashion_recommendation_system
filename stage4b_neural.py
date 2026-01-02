@@ -1,9 +1,9 @@
 """
 Stage 4B: Neural Towers Training
-Three-tower neural network for recommendation
+Two-tower neural network for recommendation
 
 This stage performs:
-1. Define Three-Tower architecture (User, Item, Image towers)
+1. Define Two-Tower architecture (User Tower, Item Tower)
 2. Train neural network with MPS/CUDA acceleration
 3. Evaluate with MAP@12
 4. Save trained model
@@ -55,40 +55,50 @@ class WeightedBCELoss(nn.Module):
             return bce_loss.mean()
 
 
-class ThreeTowerModel(nn.Module):
+class TwoTowerModel(nn.Module):
     """
-    Three-tower neural network for recommendation:
+    Two-tower neural network for recommendation:
     - User Tower: User features -> User embedding
-    - Item Tower: Item features -> Item embedding
-    - Image Tower: Image embeddings -> Image embedding
+    - Item Tower: Item features (including image embeddings) -> Item embedding
     - Fusion: Concatenated embeddings -> Final prediction
+    
+    The two-tower architecture enables:
+    - Efficient retrieval via precomputed embeddings
+    - Clear separation between user and item representations
+    - Scalable inference for large item catalogs
     """
     
     def __init__(self,
                  user_feature_dim,
                  item_feature_dim,
-                 image_feature_dim,
                  user_embedding_dim=128,
-                 item_embedding_dim=64,
-                 image_embedding_dim=128,
+                 item_embedding_dim=128,
                  fusion_hidden_dims=[256, 128, 64],
                  dropout_rate=0.3):
-        super(ThreeTowerModel, self).__init__()
+        super(TwoTowerModel, self).__init__()
         
-        # User Tower
+        # User Tower: processes user features
         self.user_tower = nn.Sequential(
             nn.Linear(user_feature_dim, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-            nn.Linear(256, user_embedding_dim),
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(128, user_embedding_dim),
             nn.BatchNorm1d(user_embedding_dim),
             nn.ReLU()
         )
         
-        # Item Tower
+        # Item Tower: processes item features (including image embeddings)
         self.item_tower = nn.Sequential(
-            nn.Linear(item_feature_dim, 128),
+            nn.Linear(item_feature_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
@@ -97,19 +107,8 @@ class ThreeTowerModel(nn.Module):
             nn.ReLU()
         )
         
-        # Image Tower
-        self.image_tower = nn.Sequential(
-            nn.Linear(image_feature_dim, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(256, image_embedding_dim),
-            nn.BatchNorm1d(image_embedding_dim),
-            nn.ReLU()
-        )
-        
-        # Fusion Layer
-        fusion_input_dim = user_embedding_dim + item_embedding_dim + image_embedding_dim
+        # Fusion Layer: combines user and item embeddings
+        fusion_input_dim = user_embedding_dim + item_embedding_dim
         fusion_layers = []
         
         prev_dim = fusion_input_dim
@@ -127,25 +126,41 @@ class ThreeTowerModel(nn.Module):
         
         self.fusion = nn.Sequential(*fusion_layers)
     
-    def forward(self, user_features, item_features, image_features):
+    def forward(self, user_features, item_features):
+        """
+        Forward pass through both towers and fusion layer.
+        
+        Args:
+            user_features: User feature tensor [batch_size, user_feature_dim]
+            item_features: Item feature tensor [batch_size, item_feature_dim]
+        
+        Returns:
+            Prediction scores [batch_size]
+        """
         user_emb = self.user_tower(user_features)
         item_emb = self.item_tower(item_features)
-        image_emb = self.image_tower(image_features)
         
-        fused = torch.cat([user_emb, item_emb, image_emb], dim=1)
+        fused = torch.cat([user_emb, item_emb], dim=1)
         output = self.fusion(fused)
         
         return output.squeeze()
+    
+    def get_user_embedding(self, user_features):
+        """Get user embedding for retrieval"""
+        return self.user_tower(user_features)
+    
+    def get_item_embedding(self, item_features):
+        """Get item embedding for retrieval"""
+        return self.item_tower(item_features)
 
 
 class RecommendationDataset(Dataset):
-    """Dataset for recommendation training"""
+    """Dataset for recommendation training with two-tower architecture"""
     
-    def __init__(self, df, user_features, item_features, image_features, labels=None):
+    def __init__(self, df, user_features, item_features, labels=None):
         self.df = df.reset_index(drop=True)
         self.user_features = user_features.values.astype(np.float32)
         self.item_features = item_features.values.astype(np.float32)
-        self.image_features = image_features.values.astype(np.float32)
         self.labels = labels.values.astype(np.float32) if labels is not None else None
     
     def __len__(self):
@@ -154,46 +169,51 @@ class RecommendationDataset(Dataset):
     def __getitem__(self, idx):
         user_feat = torch.FloatTensor(self.user_features[idx])
         item_feat = torch.FloatTensor(self.item_features[idx])
-        image_feat = torch.FloatTensor(self.image_features[idx])
         
         if self.labels is not None:
             label = torch.FloatTensor([self.labels[idx]])
-            return user_feat, item_feat, image_feat, label
+            return user_feat, item_feat, label
         else:
-            return user_feat, item_feat, image_feat
+            return user_feat, item_feat
 
 
 def identify_feature_groups(feature_cols):
-    """Identify user, item, and image features"""
+    """
+    Identify user and item features for two-tower architecture.
+    
+    User features: features related to user behavior and demographics
+    Item features: features related to item properties, including image embeddings
+    """
     user_feature_cols = []
     item_feature_cols = []
-    image_feature_cols = []
     
     for col in feature_cols:
         col_lower = col.lower()
         
-        if any(prefix in col_lower for prefix in NeuralTowerConfig.IMAGE_FEATURE_PREFIXES):
-            image_feature_cols.append(col)
-        elif any(prefix in col_lower for prefix in NeuralTowerConfig.USER_FEATURE_PREFIXES):
+        # User-related features
+        if any(prefix in col_lower for prefix in NeuralTowerConfig.USER_FEATURE_PREFIXES):
             user_feature_cols.append(col)
+        # Item-related features (including image embeddings)
         elif any(prefix in col_lower for prefix in NeuralTowerConfig.ITEM_FEATURE_PREFIXES):
             item_feature_cols.append(col)
+        elif any(prefix in col_lower for prefix in NeuralTowerConfig.IMAGE_FEATURE_PREFIXES):
+            # Image features go to item tower
+            item_feature_cols.append(col)
         else:
-            # Default to item features
+            # Default to item features for ambiguous columns
             item_feature_cols.append(col)
     
     # Ensure minimum features in each group
     if len(user_feature_cols) == 0:
+        # Take some features from item if user has none
         user_feature_cols = item_feature_cols[:10]
-    if len(image_feature_cols) == 0:
-        image_feature_cols = item_feature_cols[:5]
     
-    return user_feature_cols, item_feature_cols, image_feature_cols
+    return user_feature_cols, item_feature_cols
 
 
 def load_and_prepare_data():
-    """Load and prepare data for neural training"""
-    print_section("LOADING DATA FOR NEURAL TOWERS")
+    """Load and prepare data for neural training with two-tower architecture"""
+    print_section("LOADING DATA FOR TWO-TOWER NEURAL NETWORK")
     
     train_data = pd.read_parquet(NeuralTowerConfig.MODEL_PATH / 'train_data.parquet')
     print(f"Loaded {len(train_data):,} training samples")
@@ -208,22 +228,20 @@ def load_and_prepare_data():
     # Keep only numeric features
     numeric_features = train_data[feature_cols].select_dtypes(include=[np.number]).columns.tolist()
     
-    # Identify feature groups
-    user_feature_cols, item_feature_cols, image_feature_cols = identify_feature_groups(numeric_features)
+    # Identify feature groups for two-tower architecture
+    user_feature_cols, item_feature_cols = identify_feature_groups(numeric_features)
     
-    print(f"\nFeature groups:")
-    print(f"  User features: {len(user_feature_cols)}")
-    print(f"  Item features: {len(item_feature_cols)}")
-    print(f"  Image features: {len(image_feature_cols)}")
+    print(f"\nTwo-Tower Feature Groups:")
+    print(f"  User Tower features: {len(user_feature_cols)}")
+    print(f"  Item Tower features: {len(item_feature_cols)} (includes image embeddings)")
     
     # Handle missing values
     train_data[numeric_features] = train_data[numeric_features].fillna(0)
     val_data[numeric_features] = val_data[numeric_features].fillna(0)
     
-    # Scale features
+    # Scale features separately for each tower
     scaler_user = StandardScaler()
     scaler_item = StandardScaler()
-    scaler_image = StandardScaler()
     
     X_train_user = pd.DataFrame(
         scaler_user.fit_transform(train_data[user_feature_cols]),
@@ -232,10 +250,6 @@ def load_and_prepare_data():
     X_train_item = pd.DataFrame(
         scaler_item.fit_transform(train_data[item_feature_cols]),
         columns=item_feature_cols
-    )
-    X_train_image = pd.DataFrame(
-        scaler_image.fit_transform(train_data[image_feature_cols]),
-        columns=image_feature_cols
     )
     
     X_val_user = pd.DataFrame(
@@ -246,10 +260,6 @@ def load_and_prepare_data():
         scaler_item.transform(val_data[item_feature_cols]),
         columns=item_feature_cols
     )
-    X_val_image = pd.DataFrame(
-        scaler_image.transform(val_data[image_feature_cols]),
-        columns=image_feature_cols
-    )
     
     y_train = train_data['label']
     y_val = val_data['label']
@@ -259,24 +269,20 @@ def load_and_prepare_data():
         'val_data': val_data,
         'X_train_user': X_train_user,
         'X_train_item': X_train_item,
-        'X_train_image': X_train_image,
         'X_val_user': X_val_user,
         'X_val_item': X_val_item,
-        'X_val_image': X_val_image,
         'y_train': y_train,
         'y_val': y_val,
         'user_feature_cols': user_feature_cols,
         'item_feature_cols': item_feature_cols,
-        'image_feature_cols': image_feature_cols,
         'scaler_user': scaler_user,
         'scaler_item': scaler_item,
-        'scaler_image': scaler_image,
     }
 
 
 def train_neural_model(data):
-    """Train the Three-Tower neural network"""
-    print_section("TRAINING NEURAL TOWER MODEL")
+    """Train the Two-Tower neural network"""
+    print_section("TRAINING TWO-TOWER NEURAL MODEL")
     
     # Get device
     device = NeuralTowerConfig.get_device()
@@ -286,7 +292,6 @@ def train_neural_model(data):
         data['train_data'],
         data['X_train_user'],
         data['X_train_item'],
-        data['X_train_image'],
         data['y_train']
     )
     
@@ -294,7 +299,6 @@ def train_neural_model(data):
         data['val_data'],
         data['X_val_user'],
         data['X_val_item'],
-        data['X_val_image'],
         data['y_val']
     )
     
@@ -314,20 +318,21 @@ def train_neural_model(data):
         pin_memory=True
     )
     
-    # Initialize model
-    model = ThreeTowerModel(
+    # Initialize two-tower model
+    model = TwoTowerModel(
         user_feature_dim=len(data['user_feature_cols']),
         item_feature_dim=len(data['item_feature_cols']),
-        image_feature_dim=len(data['image_feature_cols']),
         user_embedding_dim=NeuralTowerConfig.USER_EMBEDDING_DIM,
         item_embedding_dim=NeuralTowerConfig.ITEM_EMBEDDING_DIM,
-        image_embedding_dim=NeuralTowerConfig.IMAGE_EMBEDDING_DIM,
         fusion_hidden_dims=NeuralTowerConfig.FUSION_HIDDEN_DIMS,
         dropout_rate=NeuralTowerConfig.DROPOUT_RATE
     )
     
     model = model.to(device)
     print(f"\nModel on device: {device}")
+    print(f"Model architecture: Two-Tower (User + Item)")
+    print(f"  User embedding dim: {NeuralTowerConfig.USER_EMBEDDING_DIM}")
+    print(f"  Item embedding dim: {NeuralTowerConfig.ITEM_EMBEDDING_DIM}")
     
     # Loss and optimizer
     pos_weight = (data['y_train'] == 0).sum() / (data['y_train'] == 1).sum()
@@ -362,14 +367,13 @@ def train_neural_model(data):
         model.train()
         train_losses = []
         
-        for user_feat, item_feat, image_feat, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
+        for user_feat, item_feat, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
             user_feat = user_feat.to(device)
             item_feat = item_feat.to(device)
-            image_feat = image_feat.to(device)
             labels = labels.to(device).squeeze()
             
             optimizer.zero_grad()
-            outputs = model(user_feat, item_feat, image_feat)
+            outputs = model(user_feat, item_feat)
             loss = criterion(outputs, labels)
             loss.backward()
             
@@ -387,13 +391,12 @@ def train_neural_model(data):
         all_predictions = []
         
         with torch.no_grad():
-            for user_feat, item_feat, image_feat, labels in val_loader:
+            for user_feat, item_feat, labels in val_loader:
                 user_feat = user_feat.to(device)
                 item_feat = item_feat.to(device)
-                image_feat = image_feat.to(device)
                 labels = labels.to(device).squeeze()
                 
-                outputs = model(user_feat, item_feat, image_feat)
+                outputs = model(user_feat, item_feat)
                 loss = criterion(outputs, labels)
                 
                 val_losses.append(loss.item())
@@ -457,24 +460,21 @@ def save_model(model, data, history, best_map12, best_epoch):
     torch.save({
         'model_state_dict': model.state_dict(),
         'model_config': {
+            'architecture': 'two_tower',
             'user_feature_dim': len(data['user_feature_cols']),
             'item_feature_dim': len(data['item_feature_cols']),
-            'image_feature_dim': len(data['image_feature_cols']),
             'user_embedding_dim': NeuralTowerConfig.USER_EMBEDDING_DIM,
             'item_embedding_dim': NeuralTowerConfig.ITEM_EMBEDDING_DIM,
-            'image_embedding_dim': NeuralTowerConfig.IMAGE_EMBEDDING_DIM,
             'fusion_hidden_dims': NeuralTowerConfig.FUSION_HIDDEN_DIMS,
             'dropout_rate': NeuralTowerConfig.DROPOUT_RATE
         },
         'feature_cols': {
             'user': data['user_feature_cols'],
-            'item': data['item_feature_cols'],
-            'image': data['image_feature_cols']
+            'item': data['item_feature_cols']
         },
         'scalers': {
             'user': data['scaler_user'],
-            'item': data['scaler_item'],
-            'image': data['scaler_image']
+            'item': data['scaler_item']
         },
         'best_map12': best_map12,
         'best_epoch': best_epoch,
@@ -493,7 +493,7 @@ def save_model(model, data, history, best_map12, best_epoch):
 
 def run_stage4b():
     """Run the complete Stage 4B pipeline"""
-    print_section("STAGE 4B: NEURAL TOWERS TRAINING")
+    print_section("STAGE 4B: TWO-TOWER NEURAL NETWORK TRAINING")
     
     device = NeuralTowerConfig.get_device()
     print(f"Device: {device}")
@@ -518,4 +518,3 @@ def run_stage4b():
 
 if __name__ == "__main__":
     run_stage4b()
-

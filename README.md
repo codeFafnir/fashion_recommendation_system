@@ -42,7 +42,7 @@ python main.py --stage 7        # Run evaluation only
 | 2 | Candidates | Multi-strategy candidate generation |
 | 3 | Features | Feature engineering (user, item, interaction) |
 | 4A | LightGBM | Gradient boosting model training |
-| 4B | Neural | Three-tower neural network training |
+| 4B | Neural | Two-tower neural network training |
 | 7 | Evaluation | Final metrics and submission generation |
 
 ---
@@ -101,11 +101,26 @@ We trained four distinct LightGBM model variants, each optimized for different a
 
 All models were trained with early stopping (50 rounds patience), time-based cross-validation, and feature importance tracking. Categorical features were properly encoded as integer codes, and group information was provided for ranking models to ensure proper per-user ranking. Training was optimized for M4 MacBook Air with appropriate batch sizes and memory management. After training, we created ensemble models: a weighted ensemble with configurable weights for each model, and an average ensemble that simply averaged predictions. Model checkpoints, predictions, and metadata were saved for evaluation and submission generation.
 
-### Part B: Neural Towers Training
+### Part B: Two-Tower Neural Network Training
 
-We implemented a sophisticated three-tower neural network architecture that processes different feature types through specialized towers before fusion. The **User Tower** takes 43 user features and processes them through a two-layer MLP (43 → 256 → 128) with batch normalization, ReLU activation, and dropout (0.3) to produce a 128-dimensional user embedding capturing user preferences and behavior patterns. The **Item Tower** processes 29 item features through a similar architecture (29 → 128 → 64) producing a 64-dimensional item embedding representing product characteristics. The **Image Tower** handles 512-dimensional FashionCLIP embeddings through a two-layer MLP (512 → 256 → 128) producing a 128-dimensional visual embedding capturing aesthetic and style information.
+We implemented a two-tower neural network architecture that processes user and item features through specialized towers before fusion, enabling efficient retrieval and clear separation between user and item representations.
 
-The **Fusion Layer** concatenates all three embeddings (128 + 64 + 128 = 320 dimensions) and processes them through a deep MLP (320 → 256 → 128 → 64 → 1) with batch normalization, ReLU activations, dropout regularization, and a final sigmoid activation for binary classification. The complete model contains 346,689 trainable parameters and was trained using Binary Cross-Entropy loss, AdamW optimizer with weight decay (1e-5), learning rate of 1e-3 with ReduceLROnPlateau scheduling, batch size of 2048 optimized for M4 MacBook Air, and early stopping with 5 epochs patience based on validation MAP@12. Training utilized MPS (Metal Performance Shaders) acceleration for Apple Silicon, significantly speeding up training compared to CPU-only execution.
+**User Tower Architecture:**
+The User Tower takes user-level features (demographics, purchase history, behavioral patterns) and processes them through a three-layer MLP (user_dim → 256 → 128 → 128) with batch normalization, ReLU activation, and dropout (0.3) to produce a 128-dimensional user embedding capturing user preferences and behavior patterns.
+
+**Item Tower Architecture:**
+The Item Tower processes all item-related features, including product attributes, popularity metrics, and image embeddings (FashionCLIP 512-dimensional vectors), through a similar three-layer MLP (item_dim → 256 → 128 → 128) producing a 128-dimensional item embedding. By combining item metadata with visual features in a single tower, the model learns unified item representations that capture both semantic and visual characteristics.
+
+**Fusion Layer:**
+The fusion layer concatenates user and item embeddings (128 + 128 = 256 dimensions) and processes them through a deep MLP (256 → 256 → 128 → 64 → 1) with batch normalization, ReLU activations, dropout regularization, and a final sigmoid activation for binary classification.
+
+**Training Configuration:**
+The model was trained using weighted Binary Cross-Entropy loss (to handle class imbalance), AdamW optimizer with weight decay (2e-4), learning rate of 3e-4 with ReduceLROnPlateau scheduling, batch size of 4096 optimized for M4 MacBook Air, and early stopping with 5 epochs patience based on validation MAP@12. Training utilized MPS (Metal Performance Shaders) acceleration for Apple Silicon, significantly speeding up training compared to CPU-only execution.
+
+**Advantages of Two-Tower Architecture:**
+- **Efficient Retrieval**: User and item embeddings can be precomputed separately, enabling fast approximate nearest neighbor search at inference time
+- **Scalability**: New items can be added by computing only their item embeddings without retraining
+- **Interpretability**: Clear separation between user preferences and item characteristics
 
 ### Label Creation & Dataset Preparation
 

@@ -78,7 +78,7 @@ class LightGBMConfig:
 
 
 class NeuralTowerConfig:
-    """Configuration for Neural Tower training"""
+    """Configuration for Two-Tower Neural Network training"""
     
     DATA_PATH = Config.OUTPUT_PATH
     MODEL_PATH = Config.MODEL_PATH
@@ -109,22 +109,27 @@ class NeuralTowerConfig:
     EARLY_STOPPING_PATIENCE = 5
     VALIDATION_FREQ = 1
     
-    # Model architecture
-    USER_EMBEDDING_DIM = 96
-    ITEM_EMBEDDING_DIM = 48
-    IMAGE_EMBEDDING_DIM = 96
-    FUSION_HIDDEN_DIMS = [192, 96, 48]
-    DROPOUT_RATE = 0.5
+    # Two-Tower Model architecture
+    # User Tower: processes user-level features
+    USER_EMBEDDING_DIM = 128
+    # Item Tower: processes item features + image embeddings combined
+    ITEM_EMBEDDING_DIM = 128
+    # Fusion layer dimensions
+    FUSION_HIDDEN_DIMS = [256, 128, 64]
+    DROPOUT_RATE = 0.3
     
-    # Feature prefixes
+    # Feature prefixes for tower assignment
+    # User features go to User Tower
     USER_FEATURE_PREFIXES = [
         'n_', 'avg_', 'std_', 'min_', 'max_', 'days_', 'purchase_',
         'exploration_', 'age', 'FN', 'Active', 'unique_'
     ]
+    # Item features go to Item Tower (includes image embeddings)
     ITEM_FEATURE_PREFIXES = [
         'product_', 'graphical_', 'colour_', 'perceived_', 'department_',
         'index_', 'section_', 'garment_', 'popularity_', 'sales_', 'buyers_'
     ]
+    # Image features are treated as item features in two-tower architecture
     IMAGE_FEATURE_PREFIXES = ['image_emb_']
     
     RANDOM_STATE = 42
