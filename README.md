@@ -1,5 +1,53 @@
-# Stage-by-Stage Project Descriptions
-## H&M Personalized Fashion Recommendation System
+# H&M Personalized Fashion Recommendation System
+
+A multi-stage recommendation system for fashion products using LightGBM and Neural Networks.
+
+## Project Structure
+
+```
+fashion_recommendation_system/
+├── config.py               # Shared configuration for all stages
+├── utils.py                # Utility functions (memory, GC, printing)
+├── metrics.py              # Evaluation metrics (MAP@K, NDCG, Precision, Recall)
+├── main.py                 # Main entry point to run all stages
+├── stage0_eda_baselines.py # Stage 0: EDA and Baseline models
+├── stage1_load_data.py     # Stage 1: Data loading and sampling
+├── stage2_candidates.py    # Stage 2: Candidate generation strategies
+├── stage3_features.py      # Stage 3: Feature extraction
+├── stage4a_lightgbm.py     # Stage 4A: LightGBM training
+├── stage4b_neural.py       # Stage 4B: Neural tower training
+├── stage7_evaluation.py    # Stage 7: Evaluation and metrics
+├── text_features.py        # Text-based feature extraction utilities
+└── notebook3.ipynb         # Original notebook (reference)
+```
+
+## Usage
+
+```bash
+# Run all stages
+python main.py
+
+# Run specific stage(s)
+python main.py --stage 1        # Load data only
+python main.py --stage 1 2 3    # Run stages 1, 2, and 3
+python main.py --stage 7        # Run evaluation only
+```
+
+## Stage Overview
+
+| Stage | Name | Description |
+|-------|------|-------------|
+| 0 | EDA & Baselines | Exploratory data analysis and baseline models |
+| 1 | Load Data | Data loading, temporal splits, user sampling |
+| 2 | Candidates | Multi-strategy candidate generation |
+| 3 | Features | Feature engineering (user, item, interaction) |
+| 4A | LightGBM | Gradient boosting model training |
+| 4B | Neural | Three-tower neural network training |
+| 7 | Evaluation | Final metrics and submission generation |
+
+---
+
+# Stage-by-Stage Descriptions
 
 ---
 
