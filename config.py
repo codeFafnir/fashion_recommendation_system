@@ -33,7 +33,13 @@ class Config:
     N_TRAIN_WEEKS = 11
     N_VAL_WEEKS = 1
     
-    # Sampling settings
+    # PySpark settings
+    USE_SPARK = True  # Enable PySpark for large-scale processing
+    SAMPLE_FRACTION = 0.5  # Use 50% of data instead of fixed user count
+    SPARK_MEMORY = "8g"  # Spark driver/executor memory
+    SPARK_PARTITIONS = 200  # Number of shuffle partitions
+    
+    # Sampling settings (used when USE_SPARK=False or as fallback)
     TARGET_USERS = 50000
     MIN_USER_PURCHASES = 1
     MIN_ITEM_PURCHASES = 5
